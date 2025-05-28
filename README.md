@@ -34,3 +34,132 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+# Next.js Chat App with Socket.IO, App Router, TypeScript, and Tailwind
+
+## Tutorial & Setup
+
+### 1. Install Dependencies
+
+```
+npm install socket.io socket.io-client
+```
+
+### 2. Tambahkan Tailwind CSS (jika belum)
+
+```
+npm install -D tailwindcss postcss autoprefixer
+npx tailwindcss init -p
+```
+
+Edit `tailwind.config.js` agar content-nya:
+
+```js
+module.exports = {
+  content: ["./app/**/*.{js,ts,jsx,tsx}", "./components/**/*.{js,ts,jsx,tsx}"],
+  theme: { extend: {} },
+  plugins: [],
+};
+```
+
+Edit `/styles/globals.css`:
+
+```css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+```
+
+### 3. **[PENTING]** Pindahkan Socket.IO Server ke `pages/api/socket.ts`
+
+Karena App Router (`app/api/`) tidak support Socket.IO server, buat file berikut:
+
+**Buat folder dan file:**
+
+- `pages/api/socket.ts`
+
+**Isi dengan kode berikut:**
+
+```ts
+import { Server as IOServer } from "socket.io";
+import type { NextApiRequest } from "next";
+import type { Server as NetServer } from "http";
+import type { Socket } from "net";
+
+type NextApiResponseWithSocket = {
+  socket: Socket & {
+    server: NetServer & {
+      io?: IOServer;
+    };
+  };
+};
+
+let users: Record<string, string> = {};
+
+export default function handler(
+  req: NextApiRequest,
+  res: NextApiResponseWithSocket
+) {
+  if (!res.socket.server.io) {
+    const io = new IOServer(res.socket.server, {
+      path: "/api/socket_io",
+      addTrailingSlash: false,
+    });
+    res.socket.server.io = io;
+
+    io.on("connection", (socket) => {
+      socket.on("login", (username: string) => {
+        users[socket.id] = username;
+        socket.broadcast.emit("user-list", Object.values(users));
+        socket.emit("user-list", Object.values(users));
+      });
+
+      socket.on("private-message", ({ to, message, from }) => {
+        const targetSocketId = Object.keys(users).find(
+          (key) => users[key] === to
+        );
+        if (targetSocketId) {
+          io.to(targetSocketId).emit("private-message", { from, message });
+        }
+      });
+
+      socket.on("disconnect", () => {
+        delete users[socket.id];
+        io.emit("user-list", Object.values(users));
+      });
+    });
+  }
+  res.end();
+}
+
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+```
+
+### 4. Pastikan Client Connect ke Path yang Benar
+
+Di file chat client (misal `app/chat/page.tsx`):
+
+```ts
+socket = io({
+  path: "/api/socket_io",
+});
+```
+
+### 5. Jalankan Ulang Next.js
+
+```
+npm run dev
+```
+
+### 6. Selesai! Chat app siap digunakan.
+
+---
+
+**Catatan:**
+
+- Jangan gunakan `app/api/socket/route.ts` untuk Socket.IO server.
+- Gunakan `pages/api/socket.ts` agar Socket.IO berjalan normal di Next.js.
