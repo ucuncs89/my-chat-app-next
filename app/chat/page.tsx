@@ -31,67 +31,65 @@ export default function Chat() {
     setCurrentUser(username);
   }, [router]);
 
+  const loadUsers = async () => {
+    const { data, error } = await supabase.from('users').select('username');
+    if (error) {
+      alert('Gagal memuat daftar user: ' + error.message);
+      return;
+    }
+    if (data) {
+      setOnlineUsers(data.map(user => user.username).filter(user => user !== currentUser));
+    }
+  };
+
   useEffect(() => {
-    const loadUsers = async () => {
-      const { data, error } = await supabase.from('users').select('username');
-      if (error) {
-        alert('Gagal memuat daftar user: ' + error.message);
-        return;
-      }
-      if (data) {
-        setOnlineUsers(data.map(user => user.username).filter(user => user !== currentUser));
-      }
-    };
     loadUsers();
   }, [currentUser]);
 
-  useEffect(() => {
+  const loadMessages = async () => {
     if (!currentUser || !selectedUser) return;
 
-    let isMounted = true;
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('id, sender, message, created_at')
+        .or(`and(sender.eq.${currentUser},receiver.eq.${selectedUser}),and(sender.eq.${selectedUser},receiver.eq.${currentUser})`)
+        .order('created_at', { ascending: true });
 
-    const loadMessages = async () => {
-      try {
-        const { data, error } = await supabase
-          .from('messages')
-          .select('id, sender, message, created_at')
-          .or(`and(sender.eq.${currentUser},receiver.eq.${selectedUser}),and(sender.eq.${selectedUser},receiver.eq.${currentUser})`)
-          .order('created_at', { ascending: true });
-
-        if (error) {
-          console.error('Gagal memuat pesan:', error.message);
-          return;
-        }
-
-        if (data && isMounted) {
-          const formatted = data.map(msg => ({
-            id: msg.id,
-            from: msg.sender,
-            message: msg.message,
-            created_at: msg.created_at,
-          }));
-
-          const isSame =
-            formatted.length === messages.length &&
-            formatted.every((m, i) =>
-              m.id === (messages[i] as any).id &&
-              m.message === messages[i].message
-            );
-
-          if (!isSame) {
-            setMessages(formatted);
-          }
-        }
-      } catch (err) {
-        console.error('Terjadi kesalahan saat memuat pesan', err);
+      if (error) {
+        console.error('Gagal memuat pesan:', error.message);
+        return;
       }
-    };
 
+      if (data) {
+        const formatted = data.map(msg => ({
+          id: msg.id,
+          from: msg.sender,
+          message: msg.message,
+          created_at: msg.created_at,
+        }));
+
+        const isSame =
+          formatted.length === messages.length &&
+          formatted.every((m, i) =>
+            m.id === (messages[i] as any).id &&
+            m.message === messages[i].message
+          );
+
+        if (!isSame) {
+          setMessages(formatted);
+        }
+      }
+    } catch (err) {
+      console.error('Terjadi kesalahan saat memuat pesan', err);
+    }
+  };
+
+  useEffect(() => {
     loadMessages();
     const interval = setInterval(loadMessages, 5000);
 
     return () => {
-      isMounted = false;
       clearInterval(interval);
     };
   }, [currentUser, selectedUser]);
@@ -196,6 +194,12 @@ export default function Chat() {
         <div className={`${showUsers ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 fixed lg:static inset-y-0 left-0 z-30 w-64 bg-white shadow-lg transform transition-transform duration-200 ease-in-out lg:transition-none`}>
           <div className="p-4 border-b">
             <h2 className="text-xl font-semibold">Pengguna Online</h2>
+            <button
+              onClick={loadUsers}
+              className="mt-2 bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700"
+            >
+              Refresh Users
+            </button>
           </div>
           <div className="p-4 overflow-y-auto h-[calc(100vh-4rem)] lg:h-[calc(100vh-5rem)]">
             <div className="p-2 font-semibold text-indigo-600">Me: {currentUser}</div>
@@ -221,6 +225,12 @@ export default function Chat() {
             <>
               <div className="p-4 border-b bg-white">
                 <h2 className="text-xl font-semibold">Chat dengan {selectedUser}</h2>
+                <button
+                  onClick={loadMessages}
+                  className="mt-2 bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700"
+                >
+                  Refresh Messages
+                </button>
               </div>
               <div className="flex-1 p-4 overflow-y-auto">
                 {messages.map((msg, index) => (
