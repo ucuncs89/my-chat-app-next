@@ -3,10 +3,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import io from 'socket.io-client';
+import { supabase } from '@/lib/supabaseClient';
 
 interface Message {
   from: string;
   message: string;
+  created_at?: string;
 }
 
 export default function Chat() {
@@ -20,13 +22,20 @@ export default function Chat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
+  // Check authentication
   useEffect(() => {
     const username = localStorage.getItem('username');
     if (!username) {
+      alert('Silakan login terlebih dahulu');
       router.push('/');
       return;
     }
     setCurrentUser(username);
+  }, [router]);
+
+  useEffect(() => {
+    const username = localStorage.getItem('username');
+    if (!username) return;
 
     const newSocket = io('http://localhost:3000');
     setSocket(newSocket);
@@ -46,20 +55,73 @@ export default function Chat() {
     };
   }, [router]);
 
+  // Load messages when user is selected
+  useEffect(() => {
+    const loadMessages = async () => {
+      if (!currentUser || !selectedUser) return;
+
+      try {
+        const { data, error } = await supabase
+          .from('messages')
+          .select('*')
+          .or(`and(sender.eq.${currentUser},receiver.eq.${selectedUser}),and(sender.eq.${selectedUser},receiver.eq.${currentUser})`)
+          .order('created_at', { ascending: true });
+
+        if (error) {
+          alert('Gagal memuat pesan: ' + error.message);
+          return;
+        }
+
+        if (data) {
+          const formattedMessages = data.map(msg => ({
+            from: msg.sender,
+            message: msg.message,
+            created_at: msg.created_at
+          }));
+          setMessages(formattedMessages);
+        }
+      } catch (err) {
+        alert('Terjadi kesalahan saat memuat pesan');
+      }
+    };
+
+    loadMessages();
+  }, [currentUser, selectedUser]);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const sendMessage = (e: React.FormEvent) => {
+  const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (messageInput.trim() && selectedUser) {
-      socket.emit('private-message', {
-        to: selectedUser,
-        from: currentUser,
-        message: messageInput
-      });
-      setMessages(prev => [...prev, { from: 'You', message: messageInput }]);
-      setMessageInput('');
+      try {
+        // Store in Supabase
+        const { error } = await supabase
+          .from('messages')
+          .insert({
+            sender: currentUser,
+            receiver: selectedUser,
+            message: messageInput
+          });
+
+        if (error) {
+          alert('Gagal mengirim pesan: ' + error.message);
+          return;
+        }
+
+        // Update UI and emit socket event
+        const message = { from: 'You', message: messageInput };
+        setMessages(prev => [...prev, message]);
+        socket.emit('private-message', {
+          to: selectedUser,
+          from: currentUser,
+          message: messageInput
+        });
+        setMessageInput('');
+      } catch (err) {
+        alert('Terjadi kesalahan saat mengirim pesan');
+      }
     }
   };
 
@@ -76,14 +138,14 @@ export default function Chat() {
           </svg>
         </button>
         <h1 className="text-xl font-semibold">Chat App</h1>
-        <div className="w-6"></div> {/* Spacer for alignment */}
+        <div className="w-6"></div>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
         {/* Online Users Sidebar */}
         <div className={`${showUsers ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 fixed lg:static inset-y-0 left-0 z-30 w-64 bg-white shadow-lg transform transition-transform duration-200 ease-in-out lg:transition-none`}>
           <div className="p-4 border-b">
-            <h2 className="text-xl font-semibold">Online Users</h2>
+            <h2 className="text-xl font-semibold">Pengguna Online</h2>
           </div>
           <div className="p-4 overflow-y-auto h-[calc(100vh-4rem)] lg:h-[calc(100vh-5rem)]">
             {onlineUsers.map((user) => (
@@ -108,7 +170,7 @@ export default function Chat() {
           {selectedUser ? (
             <>
               <div className="p-4 border-b bg-white">
-                <h2 className="text-xl font-semibold">Chat with {selectedUser}</h2>
+                <h2 className="text-xl font-semibold">Chat dengan {selectedUser}</h2>
               </div>
               <div className="flex-1 p-4 overflow-y-auto">
                 {messages.map((msg, index) => (
@@ -127,6 +189,11 @@ export default function Chat() {
                     >
                       <div className="font-semibold">{msg.from}</div>
                       <div className="break-words">{msg.message}</div>
+                      {msg.created_at && (
+                        <div className="text-xs opacity-75 mt-1">
+                          {new Date(msg.created_at).toLocaleTimeString()}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -139,20 +206,20 @@ export default function Chat() {
                     value={messageInput}
                     onChange={(e) => setMessageInput(e.target.value)}
                     className="flex-1 p-2 border rounded text-base"
-                    placeholder="Type a message..."
+                    placeholder="Ketik pesan..."
                   />
                   <button
                     type="submit"
                     className="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 whitespace-nowrap"
                   >
-                    Send
+                    Kirim
                   </button>
                 </div>
               </form>
             </>
           ) : (
             <div className="flex-1 flex items-center justify-center text-gray-500">
-              Select a user to start chatting
+              Pilih pengguna untuk memulai chat
             </div>
           )}
         </div>
