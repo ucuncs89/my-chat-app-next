@@ -2,17 +2,16 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import io from 'socket.io-client';
 import { supabase } from '@/lib/supabaseClient';
 
 interface Message {
+  id?: number;
   from: string;
   message: string;
   created_at?: string;
 }
 
 export default function Chat() {
-  const [socket, setSocket] = useState<any>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
   const [selectedUser, setSelectedUser] = useState<string>('');
@@ -22,7 +21,6 @@ export default function Chat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
-  // Check authentication
   useEffect(() => {
     const username = localStorage.getItem('username');
     if (!username) {
@@ -34,58 +32,110 @@ export default function Chat() {
   }, [router]);
 
   useEffect(() => {
-    const username = localStorage.getItem('username');
-    if (!username) return;
-
-    const newSocket = io('http://localhost:3000');
-    setSocket(newSocket);
-
-    newSocket.emit('register', username);
-
-    newSocket.on('online-users', (users: string[]) => {
-      setOnlineUsers(users.filter(user => user !== username));
-    });
-
-    newSocket.on('receive-message', (message: Message) => {
-      setMessages(prev => [...prev, message]);
-    });
-
-    return () => {
-      newSocket.close();
+    const loadUsers = async () => {
+      const { data, error } = await supabase.from('users').select('username');
+      if (error) {
+        alert('Gagal memuat daftar user: ' + error.message);
+        return;
+      }
+      if (data) {
+        setOnlineUsers(data.map(user => user.username).filter(user => user !== currentUser));
+      }
     };
-  }, [router]);
+    loadUsers();
+  }, [currentUser]);
 
-  // Load messages when user is selected
   useEffect(() => {
-    const loadMessages = async () => {
-      if (!currentUser || !selectedUser) return;
+    if (!currentUser || !selectedUser) return;
 
+    let isMounted = true;
+
+    const loadMessages = async () => {
       try {
         const { data, error } = await supabase
           .from('messages')
-          .select('*')
+          .select('id, sender, message, created_at')
           .or(`and(sender.eq.${currentUser},receiver.eq.${selectedUser}),and(sender.eq.${selectedUser},receiver.eq.${currentUser})`)
           .order('created_at', { ascending: true });
 
         if (error) {
-          alert('Gagal memuat pesan: ' + error.message);
+          console.error('Gagal memuat pesan:', error.message);
           return;
         }
 
-        if (data) {
-          const formattedMessages = data.map(msg => ({
+        if (data && isMounted) {
+          const formatted = data.map(msg => ({
+            id: msg.id,
             from: msg.sender,
             message: msg.message,
-            created_at: msg.created_at
+            created_at: msg.created_at,
           }));
-          setMessages(formattedMessages);
+
+          const isSame =
+            formatted.length === messages.length &&
+            formatted.every((m, i) =>
+              m.id === (messages[i] as any).id &&
+              m.message === messages[i].message
+            );
+
+          if (!isSame) {
+            setMessages(formatted);
+          }
         }
       } catch (err) {
-        alert('Terjadi kesalahan saat memuat pesan');
+        console.error('Terjadi kesalahan saat memuat pesan', err);
       }
     };
 
     loadMessages();
+    const interval = setInterval(loadMessages, 5000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [currentUser, selectedUser]);
+
+  useEffect(() => {
+    if (!currentUser || !selectedUser) return;
+
+    const channel = supabase
+      .channel('messages')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `sender=eq.${selectedUser},receiver=eq.${currentUser}`,
+        },
+        (payload) => {
+          const newMessage = payload.new as {
+            id: number;
+            sender: string;
+            message: string;
+            created_at: string;
+          };
+
+          setMessages(prev => {
+            if (prev.find(m => (m as any).id === newMessage.id)) {
+              return prev;
+            }
+
+            return [...prev, {
+              id: newMessage.id,
+              from: newMessage.sender,
+              message: newMessage.message,
+              created_at: newMessage.created_at
+            }];
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
   }, [currentUser, selectedUser]);
 
   useEffect(() => {
@@ -96,28 +146,30 @@ export default function Chat() {
     e.preventDefault();
     if (messageInput.trim() && selectedUser) {
       try {
-        // Store in Supabase
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('messages')
           .insert({
             sender: currentUser,
             receiver: selectedUser,
             message: messageInput
-          });
+          })
+          .select();
 
         if (error) {
           alert('Gagal mengirim pesan: ' + error.message);
           return;
         }
 
-        // Update UI and emit socket event
-        const message = { from: 'You', message: messageInput };
-        setMessages(prev => [...prev, message]);
-        socket.emit('private-message', {
-          to: selectedUser,
-          from: currentUser,
-          message: messageInput
-        });
+        if (data && data.length > 0) {
+          const inserted = data[0];
+          setMessages(prev => [...prev, {
+            id: inserted.id,
+            from: currentUser,
+            message: inserted.message,
+            created_at: inserted.created_at
+          }]);
+        }
+
         setMessageInput('');
       } catch (err) {
         alert('Terjadi kesalahan saat mengirim pesan');
@@ -127,7 +179,6 @@ export default function Chat() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-100">
-      {/* Mobile Header */}
       <div className="lg:hidden bg-white shadow-md p-4 flex items-center justify-between">
         <button
           onClick={() => setShowUsers(!showUsers)}
@@ -142,12 +193,12 @@ export default function Chat() {
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Online Users Sidebar */}
         <div className={`${showUsers ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 fixed lg:static inset-y-0 left-0 z-30 w-64 bg-white shadow-lg transform transition-transform duration-200 ease-in-out lg:transition-none`}>
           <div className="p-4 border-b">
             <h2 className="text-xl font-semibold">Pengguna Online</h2>
           </div>
           <div className="p-4 overflow-y-auto h-[calc(100vh-4rem)] lg:h-[calc(100vh-5rem)]">
+            <div className="p-2 font-semibold text-indigo-600">Me: {currentUser}</div>
             {onlineUsers.map((user) => (
               <div
                 key={user}
@@ -165,7 +216,6 @@ export default function Chat() {
           </div>
         </div>
 
-        {/* Chat Area */}
         <div className="flex-1 flex flex-col">
           {selectedUser ? (
             <>
@@ -175,16 +225,12 @@ export default function Chat() {
               <div className="flex-1 p-4 overflow-y-auto">
                 {messages.map((msg, index) => (
                   <div
-                    key={index}
-                    className={`mb-4 ${
-                      msg.from === 'You' ? 'text-right' : 'text-left'
-                    }`}
+                    key={msg.id ?? index}
+                    className={`mb-4 flex ${msg.from === currentUser ? 'justify-end' : 'justify-start'}`}
                   >
                     <div
-                      className={`inline-block p-3 rounded-lg max-w-[80%] sm:max-w-[70%] ${
-                        msg.from === 'You'
-                          ? 'bg-indigo-600 text-white'
-                          : 'bg-gray-200'
+                      className={`p-3 rounded-lg max-w-[80%] sm:max-w-[70%] ${
+                        msg.from === currentUser ? 'bg-indigo-600 text-white' : 'bg-gray-200'
                       }`}
                     >
                       <div className="font-semibold">{msg.from}</div>
@@ -225,13 +271,35 @@ export default function Chat() {
         </div>
       </div>
 
-      {/* Mobile Overlay */}
       {showUsers && (
         <div
           className="lg:hidden fixed inset-0 bg-black bg-opacity-50 z-20"
           onClick={() => setShowUsers(false)}
         />
       )}
+
+      <div className="fixed top-4 right-4">
+        <button
+          onClick={async () => {
+            try {
+              const { error } = await supabase
+                .from('users')
+                .delete()
+                .eq('username', currentUser);
+              if (error) {
+                console.error('Gagal logout:', error.message);
+              }
+            } catch (err) {
+              console.error('Terjadi kesalahan saat logout:', err);
+            }
+            localStorage.removeItem('username');
+            router.push('/');
+          }}
+          className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
+        >
+          Logout
+        </button>
+      </div>
     </div>
   );
 }
