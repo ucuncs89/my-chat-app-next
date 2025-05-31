@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Message } from "@/app/types";
+import { getDeviceId } from "@/lib/fingerprint";
 import UserList from "@/app/components/chat/UserList";
 import ChatHeader from "@/app/components/chat/ChatHeader";
 import MessageList from "@/app/components/chat/MessageList";
@@ -31,13 +32,14 @@ export default function Chat() {
     }, [router]);
 
     const loadUsers = async () => {
-        const { data, error } = await supabase.from("users").select("username");
+        const { data, error } = await supabase.from("users").select("username, device_id").not("username", "eq", currentUser);
+
         if (error) {
             alert("Gagal memuat daftar user: " + error.message);
             return;
         }
         if (data) {
-            setOnlineUsers(data.map((user) => user.username).filter((user) => user !== currentUser));
+            setOnlineUsers(data.map((user) => user.username));
         }
     };
 
@@ -207,7 +209,12 @@ export default function Chat() {
                 <button
                     onClick={async () => {
                         try {
-                            const { error } = await supabase.from("users").delete().eq("username", currentUser);
+                            const deviceId = await getDeviceId();
+                            const { error } = await supabase.from("users").delete().match({
+                                username: currentUser,
+                                device_id: deviceId,
+                            });
+
                             if (error) {
                                 console.error("Gagal logout:", error.message);
                             }
