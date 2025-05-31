@@ -1,26 +1,58 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { getDeviceId } from "@/lib/fingerprint";
 
 export default function Home() {
     const [username, setUsername] = useState("");
     const [loading, setLoading] = useState(false);
+    const [deviceId, setDeviceId] = useState<string | null>(null);
     const router = useRouter();
+
+    useEffect(() => {
+        const initFingerprint = async () => {
+            const id = await getDeviceId();
+            setDeviceId(id);
+
+            // Check if this device already has a user
+            const { data } = await supabase.from("users").select("username").eq("device_id", id).single();
+
+            if (data) {
+                // If device already has a user, auto-login
+                localStorage.setItem("username", data.username);
+                router.push("/chat");
+            }
+        };
+
+        initFingerprint();
+    }, [router]);
 
     const handleRegister = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!username.trim()) return;
+        if (!username.trim() || !deviceId) return;
         setLoading(true);
         try {
-            // Cek apakah user sudah ada
-            const { data, error } = await supabase.from("users").select("username").eq("username", username).single();
-            if (!data) {
-                // Insert user baru jika belum ada
-                const { error: insertError } = await supabase.from("users").insert({ username });
-                if (insertError) throw insertError;
+            // Check if username is already taken
+            const { data: existingUser } = await supabase.from("users").select("username, device_id").or(`username.eq.${username},device_id.eq.${deviceId}`).single();
+
+            if (existingUser) {
+                if (existingUser.username === username) {
+                    throw new Error("Username sudah digunakan");
+                } else {
+                    throw new Error("Perangkat ini sudah terdaftar dengan username lain");
+                }
             }
+
+            // Insert new user with device_id
+            const { error: insertError } = await supabase.from("users").insert({
+                username,
+                device_id: deviceId,
+            });
+
+            if (insertError) throw insertError;
+
             localStorage.setItem("username", username);
             router.push("/chat");
         } catch (err: any) {
