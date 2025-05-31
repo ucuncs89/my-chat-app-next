@@ -209,15 +209,14 @@ export default function Chat() {
                 <button
                     onClick={async () => {
                         try {
-                            const deviceId = await getDeviceId();
-                            const { error } = await supabase.from("users").delete().match({
-                                username: currentUser,
-                                device_id: deviceId,
-                            });
-
-                            if (error) {
-                                console.error("Gagal logout:", error.message);
-                            }
+                            // const deviceId = await getDeviceId();
+                            // const { error } = await supabase.from("users").delete().match({
+                            //     username: currentUser,
+                            //     device_id: deviceId,
+                            // });
+                            // if (error) {
+                            //     console.error("Gagal logout:", error.message);
+                            // }
                         } catch (err) {
                             console.error("Terjadi kesalahan saat logout:", err);
                         }
